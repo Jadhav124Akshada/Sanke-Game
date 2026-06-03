@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>SnakeSync</title>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        #ui-container {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            width: 600px;
+            margin-bottom: 15px;
+            padding: 0 10px;
+        }
+
+        #score-ui {
+            font-size: 1.2rem;
+            color: #39ff14;
+            text-shadow: 0 0 10px rgba(57, 255, 20, 0.5);
+        }
+
+        #sound-toggle {
+            cursor: pointer;
+            font-size: 24px;
+            color: #39ff14;
+            transition: 0.2s;
+        }
+
+        #sound-toggle:hover {
+            transform: scale(1.1);
+            color: #fff;
+        }
+
+        /* Red styling for Game Over state */
+        .btn-red {
+            background: #ff0000 !important;
+            color: white !important;
+            box-shadow: 0 0 20px #ff0000 !important;
+            border: 2px solid white !important;
+        }
+
+        #status-text {
+            transition: color 0.3s ease;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="ui-container">
+        <div id="score-ui">SCORE: 0 | BEST: <span id="best-ui">0</span></div>
+        <div id="sound-toggle" onclick="toggleSound()">
+            <i id="sound-icon" class="fas fa-volume-up"></i>
+        </div>
+    </div>
+
+    <div id="game-box">
+        <div id="overlay">
+            <h1 id="status-text">SnakeSync</h1>
+            <button id="main-btn" onclick="startGame()">Start Game</button>
+        </div>
+        <canvas id="c" width="600" height="600"></canvas>
+    </div>
+
+    <audio id="sound-eat" src="{{ url_for('static', filename='eat.mp3') }}"></audio>
+    <audio id="sound-over" src="{{ url_for('static', filename='fahhhhh.mp3') }}"></audio>
+
+    <script>
+        const canvas = document.getElementById('c'), ctx = canvas.getContext('2d');
+        const scoreUI = document.getElementById('score-ui'), 
+              bestUI = document.getElementById('best-ui'),
+              overlay = document.getElementById('overlay'),
+              statusText = document.getElementById('status-text'),
+              mainBtn = document.getElementById('main-btn'),
+              soundIcon = document.getElementById('sound-icon');
+        
+        const eatAudio = document.getElementById('sound-eat');
+        const overAudio = document.getElementById('sound-over');
+        
+        let dir = "UP", cellSize = 30, lastScore = 0, gameActive = false;
+        let bestScore = localStorage.getItem('snakeBestScore') || 0;
+        let isMuted = false;
+
+        bestUI.innerText = bestScore;
+
+        function toggleSound() {
+            isMuted = !isMuted;
+            soundIcon.className = isMuted ? "fas fa-volume-mute" : "fas fa-volume-up";
+        }
+
+        async function startGame() {
+            try {
+                const response = await fetch('/reset_snake', { method: 'POST' });
+                if (response.ok) {
+                    overlay.style.display = "none";
+                    statusText.innerText = "SnakeSync";
+                    statusText.style.color = "#39ff14";
+                    mainBtn.classList.remove('btn-red');
+                    mainBtn.innerText = "Start Game";
+                    
+                    lastScore = 0; 
+                    dir = "UP";
+                    gameActive = true;
+                    
+                    scoreUI.innerHTML = `SCORE: 0 | BEST: <span id="best-ui">${bestScore}</span>`;
+                }
+            } catch (error) {
+                console.error("Failed to sync with server:", error);
+                alert("Server Unreachable! Start the gRPC server first.");
+            }
+        }
+
+        window.onkeydown = e => {
+            if (e.key === "ArrowUp" && dir !== "DOWN") dir = "UP";
+            else if (e.key === "ArrowDown" && dir !== "UP") dir = "DOWN";
+            else if (e.key === "ArrowLeft" && dir !== "RIGHT") dir = "LEFT";
+            else if (e.key === "ArrowRight" && dir !== "LEFT") dir = "RIGHT";
+        };
+
+        setInterval(() => {
+            if (!gameActive) return;
+
+            fetch('/update_snake', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ direction: dir })
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.is_game_over) {
+                    if(!isMuted) overAudio.play();
+                    gameActive = false;
+                    statusText.innerText = "GAME OVER";
+                    statusText.style.color = "#ff0000";
+                    mainBtn.innerText = "Restart";
+                    mainBtn.classList.add('btn-red');
+                    overlay.style.display = "flex";
+                    return;
+                }
+                
+                if (data.score > lastScore) {
+                    if(!isMuted) {
+                        eatAudio.currentTime = 0;
+                        eatAudio.play();
+                    }
+                    lastScore = data.score;
+                    if (data.score > bestScore) {
+                        bestScore = data.score;
+                        localStorage.setItem('snakeBestScore', bestScore);
+                    }
+                }
+
+                render(data);
+            })
+            .catch(err => {
+                gameActive = false;
+                console.error("Distributed Sync Lost:", err);
+            });
+        }, 150);
+
+        function render(data) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // 1. Draw Animated Apple (3D Gradient + Glow)
+            const appleX = data.food.x * cellSize + cellSize / 2;
+            const appleY = data.food.y * cellSize + cellSize / 2;
+            const appleRadius = cellSize / 2 - 2;
+
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = "#ff0000";
+            
+            // Create 3D sphere gradient for apple
+            const appleGradient = ctx.createRadialGradient(
+                appleX - 4, appleY - 4, 1, 
+                appleX, appleY, appleRadius
+            );
+            appleGradient.addColorStop(0, "#ff7675"); // Highlight
+            appleGradient.addColorStop(1, "#d63031"); // Base Red
+
+            ctx.fillStyle = appleGradient;
+            ctx.beginPath();
+            ctx.arc(appleX, appleY, appleRadius, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Leaf on Apple
+            ctx.shadowBlur = 0;
+            ctx.fillStyle = "#2ecc71";
+            ctx.fillRect(appleX - 1, appleY - appleRadius - 3, 3, 6);
+
+            // 2. Draw Smooth Animated Neon Snake
+            ctx.shadowBlur = 12;
+            ctx.shadowColor = "#39ff14";
+
+            data.snake_body.forEach((p, index) => {
+                // Head is brighter, body is neon green
+                ctx.fillStyle = (index === 0) ? "#ccff00" : "#39ff14";
+                
+                const x = p.x * cellSize + 2;
+                const y = p.y * cellSize + 2;
+                const size = cellSize - 4;
+                const radius = 8; // Rounded corners for a "liquid" look
+
+                // Draw Rounded Rectangle for each segment
+                ctx.beginPath();
+                ctx.moveTo(x + radius, y);
+                ctx.arcTo(x + size, y, x + size, y + size, radius);
+                ctx.arcTo(x + size, y + size, x, y + size, radius);
+                ctx.arcTo(x, y + size, x, y, radius);
+                ctx.arcTo(x, y, x + size, y, radius);
+                ctx.closePath();
+                ctx.fill();
+
+                // Add "eyes" to the head segment
+                if (index === 0) {
+                    ctx.shadowBlur = 0;
+                    ctx.fillStyle = "black";
+                    // Simple logic for eye placement (centered)
+                    ctx.beginPath();
+                    ctx.arc(x + size/4, y + size/3, 2, 0, Math.PI*2);
+                    ctx.arc(x + 3*size/4, y + size/3, 2, 0, Math.PI*2);
+                    ctx.fill();
+                }
+            });
+            
+            scoreUI.innerHTML = `SCORE: ${data.score} | BEST: <span id="best-ui">${bestScore}</span>`;
+            ctx.shadowBlur = 0;
+        }
+    </script>
+</body>
+</html>

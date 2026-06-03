@@ -1,0 +1,18 @@
+syntax = "proto3";
+package snakegame;
+
+service SnakeService {
+  rpc UpdateGame (MoveRequest) returns (GameState) {}
+  rpc ResetGame (Empty) returns (GameState) {}
+}
+
+message Empty {}
+message MoveRequest { string direction = 1; }
+message Position { int32 x = 1; int32 y = 2; }
+
+message GameState {
+  repeated Position snake_body = 1;
+  Position food = 2;
+  int32 score = 3;
+  bool is_game_over = 4;
+}
